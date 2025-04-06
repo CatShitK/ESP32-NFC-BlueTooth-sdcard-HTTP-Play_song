@@ -21,7 +21,7 @@
 
 #include <Wire.h>
 #include <Adafruit_PN532.h>
-
+#include <Adafruit_NeoPixel.h>
 // //测试NFC，串口会打印MAC地址，需要记录
 #include <Wire.h>
 #include <Adafruit_PN532.h>
@@ -37,18 +37,27 @@
 // #define SPI_MISO      19->8
 // #define SPI_SCK       18->7
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "esp_log.h"
+#include "driver/gpio.h"
+
+
 //PN532
 #define SDA_PIN 18  
 #define SCL_PIN 17
 //MAx98357
 #define I2S_DOUT      47
-#define I2S_BCLK      48
+#define I2S_BCLK      41
+// #define I2S_BCLK      48
 #define I2S_LRC       15
 //SD卡
 #define SD_CS          5
 #define SPI_MOSI      9
 #define SPI_MISO     8
 #define SPI_SCK      7
+//点灯
+#define Led 2
 
 Audio audio;
 Adafruit_PN532 nfc(SDA_PIN, SCL_PIN);
@@ -216,73 +225,8 @@ void listDir(fs::FS &fs, const char * dirname, uint8_t levels){
     }
 }
 
-// // //访问http获取文件并下载到SD卡中V4.0----20s
-// //使用使用压缩传输:
-// void downloadMp3FileToSD(const char* url, const char* filename) {
-//   HTTPClient http;
-//   http.begin(url);
-//   http.addHeader("Accept-Encoding", "gzip, deflate");
-
-//   int httpCode = http.GET();
-//   if (httpCode > 0) {
-//     if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-//       File file = SD.open(filename, FILE_WRITE);
-//       if (file) {
-//         http.writeToStream(&file);
-//         file.close();
-//         Serial.printf("MP3 文件 '%s' 已保存到 SD 卡\n", filename);
-
-//       } else {
-//         Serial.printf("无法打开文件 '%s'\n", filename);
-//       }
-//     } else {
-//       Serial.printf("HTTP 请求失败, 错误代码: %d\n", httpCode);
-//     }
-//   } else {
-//     Serial.printf("HTTP 请求失败, 错误: %s\n", http.errorToString(httpCode).c_str());
-//   }
-//   http.end();
-// }
-
 //使用使用压缩传输:
 const char *headerKeys[] = {"Content-Disposition", "Content-Type"};
-
-void downloadMp3FileToSD(const char* url,String uidString) {
-  HTTPClient http;
-  http.begin(url);
-  http.collectHeaders(headerKeys, 2); // 准备需要接收的响应头内容
-  int httpCode = http.GET();
-  if (httpCode > 0) {
-    if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
-      String contentDisposition = http.header("Content-Disposition"); // 获取Content-Disposition头的值
-      int start = contentDisposition.indexOf("filename=") + 9; // 找到 "filename=" 的位置并加上长度
-      String filename = contentDisposition.substring(start);    //获取文件名
-      File file = SD.open("/"+filename, FILE_WRITE);
-      if (file) {
-        http.writeToStream(&file);
-        file.close();
-        Serial.printf("File downloaded successfully", filename);
-        //写文件
-        appendToConfigFile(uidString,filename);
-
-        http.end();
-        listDir(SD, "/", 0);
-        Serial.printf("config file Update!" );
-        printConfigFileContents();
-        String fullPath = "/" + filename;
-        //转换格式以通过文件名播放
-        audio.connecttoFS(SD,fullPath.c_str());
-      } else {
-        Serial.printf("无法打开文件 '%s'\n", filename);
-      }
-    } else {
-      Serial.printf("HTTP 请求失败, 错误代码: %d\n", httpCode);
-    }
-  } else {
-    Serial.printf("HTTP 请求失败, 错误: %s\n", http.errorToString(httpCode).c_str());
-  }
-}
-
 
  
 BLEServer *pServer = NULL;
@@ -329,16 +273,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
       //连接上蓝牙，返回wifi状态
           //初始化防止报错
     std::string dataToSend = "NoYet";
-    // 检查 WiFi 连接状态并发送相应的字符串
-    if (WiFi.status() == WL_CONNECTED) {
-        dataToSend = "WiFiconnected";
-        Serial.println("WiFi connected");
-        // audio.connecttoFS(SD,"/Where Is My Mind.MP3");
-    } else {
-        dataToSend = "NoWificonnected";
-        Serial.println("NoWificonnected");
-        //audio.connecttoFS(SD,"/WiFifail.mp3");
-    }
+
     // 将字符串转换为字节数组
     uint8_t sendData[dataToSend.length()];
     for (size_t i = 0; i < dataToSend.length(); i++) {
@@ -372,14 +307,18 @@ class MyCallbacks: public BLECharacteristicCallbacks {
           Serial.print(rxValue[i]);
           resStr += rxValue[i];
           //对接收到字符串进行判断，如果有分号，则代表是连接wifi，则开始连接wifi
-          if(rxValue[i]==';')
+          if(rxValue[i]=='a')
           {
             BeginWificonnect = 1;
+            //digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on (HIGH is the voltage level)
+            Serial.println("LED on");
           }
           //对接收到字符串进行判断，如果有等号，则代表是拼接http地址，则开始拼接
-          if(rxValue[i]=='=')
+          if(rxValue[i]=='b')
           {
-              ComposeHttp = 1;
+            ComposeHttp = 1;
+            //digitalWrite(LED_BUILTIN, LOW);   // turn the LED off by making the voltage LOW
+            Serial.println("LED off");
           }          
         }
         Serial.println();
@@ -388,7 +327,7 @@ class MyCallbacks: public BLECharacteristicCallbacks {
       
       std::string received_data = rxValue;
       //微信小程序接收链接，误解需求， //如果收到账号密码，才开始连接wifi
-        if(BeginWificonnect==1)
+        if(BeginWificonnect==10)
       {
         // 分割字符串
       std::vector<std::string> parts;
@@ -512,7 +451,7 @@ void Init_uid()
   Serial.println("chipId:"+chipId);
   Serial.println();
   // Create the BLE Device
-  BLEDevice::init("xhn_Service");
+  BLEDevice::init("wsc_Secure");
   // Create the BLE Server
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -630,7 +569,7 @@ void ReadNfcMatchMP3(void *pvParameters)
           audio.stopSong();
           delay(30);
           Serial.println("MP3 music shop!!");
-          audio.connecttoFS(SD, mp3FileName.c_str()); 
+          audio.connecttoFS(SD, "pass.mp3"); 
           printConfigFileContents();
           found = true;
           break;
@@ -639,10 +578,8 @@ void ReadNfcMatchMP3(void *pvParameters)
       if (!found)
     {
 
-    Serial.println("MP3 file not found, playing online...");
-    String HttpGetFull = HttpGet+uidString;
-    Serial.println(HttpGetFull);
-    downloadMp3FileToSD(HttpGetFull.c_str(),uidString);
+    Serial.println("NFC card not found, playing Alarm...");
+    audio.connecttoFS(SD, "Alarm.mp3"); 
 
     // //当本地没有对应文件，则向小程序发送请求获取NFC-KEY值
     // Serial.println("MP3 file not found, Connectting to WX...");
@@ -746,6 +683,9 @@ void setup() {
   //图片放大器初始化
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
   audio.setVolume(3); // 0...21    控制音量
+
+  // digitalWrite(LED_BUILTIN, LOW);   // turn the LED off by making the voltage LOW
+
  
   Init_uid();  //随机生成uuid
   if (!SD.begin(SD_CS)) 
@@ -771,35 +711,35 @@ void setup() {
   {
     Serial.println("打开配置文件成功！");
   }
-  //查看wifi配置文件
-  // 打开WifiConfig.txt文件
-  File configFile = SD.open("/WifiConfig.txt", FILE_READ);
-  if (configFile) {
-    String configContent = configFile.readString();  // 读取全部内容
-    configFile.close();
-    if (configContent.length() > 0)
-    {
-    // 查找并分割字符串以获取WiFi SSID和密码
-    int delimiterPos = configContent.indexOf(" ");
-    if (delimiterPos != -1) {
-      // 用于存储WiFi SSID和密码的变量
-      String wifiSSID;
-      String wifiPassword;
-      wifiSSID = configContent.substring(0, delimiterPos);
-      wifiPassword = configContent.substring(delimiterPos + 1);
-      wifiSSID.trim();  // 去掉首尾空格
-      wifiPassword.trim(); 
-      Serial.println("WiFi SSID: " + wifiSSID);
-      Serial.println("WiFi Password: " + wifiPassword);
-      connectToWiFi(wifiSSID.c_str(), wifiPassword.c_str());
-      } 
-    }
-    else {
-      Serial.println("WifiConfig.txt is empty.");
-    }
-  } else {
-    Serial.println("Failed to open WifiConfig.txt.");
-  }     
+  // //查看wifi配置文件
+  // // 打开WifiConfig.txt文件
+  // File configFile = SD.open("/WifiConfig.txt", FILE_READ);
+  // if (configFile) {
+  //   String configContent = configFile.readString();  // 读取全部内容
+  //   configFile.close();
+  //   if (configContent.length() > 0)
+  //   {
+  //   // 查找并分割字符串以获取WiFi SSID和密码
+  //   int delimiterPos = configContent.indexOf(" ");
+  //   if (delimiterPos != -1) {
+  //     // 用于存储WiFi SSID和密码的变量
+  //     String wifiSSID;
+  //     String wifiPassword;
+  //     wifiSSID = configContent.substring(0, delimiterPos);
+  //     wifiPassword = configContent.substring(delimiterPos + 1);
+  //     wifiSSID.trim();  // 去掉首尾空格
+  //     wifiPassword.trim(); 
+  //     Serial.println("WiFi SSID: " + wifiSSID);
+  //     Serial.println("WiFi Password: " + wifiPassword);
+  //     connectToWiFi(wifiSSID.c_str(), wifiPassword.c_str());
+  //     } 
+  //   }
+  //   else {
+  //     Serial.println("WifiConfig.txt is empty.");
+  //   }
+  // } else {
+  //   Serial.println("Failed to open WifiConfig.txt.");
+  // }     
 
   //  // 打开WifiConfig.txt文件
   // File configFile = SD.open("/WifiConfig.txt", FILE_READ);
@@ -837,25 +777,22 @@ void setup() {
   //xTaskCreate(ReadNfcMatchMP3Task, "NfcTask", 4096, NULL, 2, NULL);
   //audio.connecttohost(HttpGet); //  128k mp在线播放
   xTaskCreate(ReadNfcMatchMP3, "ReadNfcMatchMP3", 1024*6, NULL, 2, &ReadNfcMatchMP3Handle);
-  if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("WiFi connected");
-        audio.connecttoFS(SD,"/WiFisuccess.mp3");
+  // if (WiFi.status() == WL_CONNECTED) {
+  //       Serial.println("WiFi connected");
+  //       audio.connecttoFS(SD,"/WiFisuccess.mp3");
 
-    } else {
-        Serial.println("NoWificonnected");
-        audio.connecttoFS(SD,"/WiFifail.mp3");
-    }
+  //   } else {
+  //       Serial.println("NoWificonnected");
+  //       audio.connecttoFS(SD,"/WiFifail.mp3");
+  //   }
 }
 
 String readString;
 
 void loop()
 {
-  //   if(stop_button.onPressed())
-  // {
-  //   //暂停，播放
-  //   audio.pauseResume();
-  // }
+
+
     audio.loop();
     if(Serial.available()){ // put streamURL in serial monitor
         audio.stopSong();

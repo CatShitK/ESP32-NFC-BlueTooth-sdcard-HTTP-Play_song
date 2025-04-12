@@ -311,19 +311,19 @@ class MyCallbacks: public BLECharacteristicCallbacks {
           {
             BeginWificonnect = 1;
             //digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on (HIGH is the voltage level)
-            Serial.println("LED on");
+            Serial.println("小程序蓝牙控制开门");
           }
           //对接收到字符串进行判断，如果有等号，则代表是拼接http地址，则开始拼接
           if(rxValue[i]=='b')
           {
             ComposeHttp = 1;
             //digitalWrite(LED_BUILTIN, LOW);   // turn the LED off by making the voltage LOW
-            Serial.println("LED off");
+            Serial.println("小程序蓝牙控制关闭报警");
           }          
         }
         Serial.println();
         //Serial.println("*********");
-        Serial.println(resStr);
+        //Serial.println(resStr);
       
       std::string received_data = rxValue;
       //微信小程序接收链接，误解需求， //如果收到账号密码，才开始连接wifi

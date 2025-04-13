@@ -485,32 +485,12 @@ TaskHandle_t downloadTaskHandle = NULL;
 TaskHandle_t ReadNfcMatchMP3Handle = NULL; // 定义 ReadNfcMatchMP3 任务的句柄
 bool downloadComplete = false;
 
-// void downloadMp3Task(void *pvParameters) {
-//   while (1) {
-//     // 等待主任务的通知
-//     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-//     //downloadMp3FileToSD(HttpGet);
-//     Serial.println("Downloade compete：");
-//     listDir(SD, "/", 0);
-//     // 通知主任务下载完成
-//     // 设置下载完成标志位
-//     downloadComplete = true;
-// // 检查 ReadNfcMatchMP3Handle 是否有效
-//     if (ReadNfcMatchMP3Handle != NULL) {
-//       // 通知主任务下载完成
-//       xTaskNotify(ReadNfcMatchMP3Handle, 1, eSetValueWithOverwrite);
-//     } else {
-//       Serial.println("Error: ReadNfcMatchMP3Handle is NULL");
-//     }
-//   }
-// }
-
 void ReadNfcMatchMP3(void *pvParameters) 
 {
   while (1) 
   {
     Serial.println("Task 1 is running...");
-    uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 }; // 存储读取到的UID
+    uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 }; // 存储读取到的UIDs
     uint8_t uidLength; // UID长度
    
     Serial.println("Waiting for NFC card....");
@@ -549,7 +529,6 @@ void ReadNfcMatchMP3(void *pvParameters)
       {
         //Serial.println("不同的UID,操作切换歌曲");
         pre_uidString = uidString;
-        //
         // audiopaly = false;
       }
       bool found = false;
@@ -576,55 +555,10 @@ void ReadNfcMatchMP3(void *pvParameters)
         }
       }
       if (!found)
-    {
-
-    Serial.println("NFC card not found, playing Alarm...");
-    audio.connecttoFS(SD, "Alarm.mp3"); 
-
-    // //当本地没有对应文件，则向小程序发送请求获取NFC-KEY值
-    // Serial.println("MP3 file not found, Connectting to WX...");
-
-    // //小程序传输http，已弃用
-    // // 有一个需要发送的数据字符串
-    // String dataToSend = uidString;
-    // // 将字符串转换为字节数组
-    // size_t length = dataToSend.length();
-    // uint8_t *sendData = (uint8_t *)malloc(length);
-    // for (size_t i = 0; i < length; ++i) {
-    //   sendData[i] = dataToSend[i];
-    // }
-    // // 设置特征的值并发送通知
-    // pTxCharacteristic->setValue(sendData, length);
-    // pTxCharacteristic->notify();
-    // // 释放之前分配的内存
-    // free(sendData);
-    // sendData = NULL;
-    // //小程序传输http，已弃用
-    
-
-    // 在配置文件中找不到对应的MP3文件,改为通过HTTP在线播放
-    // //若找不到就在线播放
-    // Serial.println("MP3 file not found, playing online...");
-    //audio.connecttohost(HttpGet); //  128k mp
-    //downloadMp3FileToSD(HttpGet,"/file11.mp3");
-    //audio.connecttoFS(SD, "/file11.mp3");
-    // Serial.println("下载完毕的SD卡文件列表：");
-    // listDir(SD, "/", 0);
-    // 创建子任务执行下载操作
-      // if (downloadTaskHandle == NULL) {
-    //  xTaskCreate(downloadMp3Task, "DownloadMP3", 4096, NULL, 2, &downloadTaskHandle);
-    // Serial.println("Downloade compete：");
-    // listDir(SD, "/", 0);
-     
-  //    }
-
-      // // 通知子任务开始下载
-      // xTaskNotify(downloadTaskHandle, 1, eSetValueWithOverwrite);
-
-      // // 等待下载完成
-      // ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-    }
+      {
+      Serial.println("NFC card not found, playing Alarm...");
+      audio.connecttoFS(SD, "Alarm.mp3"); 
+      }
     }  
     vTaskDelay(1000 / portTICK_PERIOD_MS);
   }

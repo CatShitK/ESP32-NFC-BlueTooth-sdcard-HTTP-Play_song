@@ -37,11 +37,12 @@
 // #define SPI_MISO      19->8
 // #define SPI_SCK       18->7
 
+//RGB灯
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "esp_log.h"
 #include "driver/gpio.h"
-
+#include <Adafruit_NeoPixel.h>
 
 //PN532
 #define SDA_PIN 18  
@@ -59,6 +60,12 @@
 //点灯
 #define Led 2
 
+//按钮
+// 定义标志变量，初始值为0表示按钮未按下
+int buttonPressedFlag = 0; 
+const int buttonPin = 0; // 通常BOOT按钮是GPIO0
+int lastButtonState = HIGH; // 上拉输入，默认高电平
+int buttonState;
 Audio audio;
 Adafruit_PN532 nfc(SDA_PIN, SCL_PIN);
 File configFile;
@@ -94,7 +101,11 @@ String globalWifi, globalPassword;
 String globalHttpGet;
 void appendToConfigFile(const String& uidString, const String& fileName);
 void appendWiToConfigFile(const String& wifi,const String& password);
-
+//RGB
+#define TAG "RGB-WS2812"
+#define LED_COUNT  1
+#define RGB_LED_PIN GPIO_NUM_48
+Adafruit_NeoPixel rgbLED(LED_COUNT, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // 清除WiFi配置
 // 清空指定文件内容的函数
@@ -485,27 +496,103 @@ TaskHandle_t downloadTaskHandle = NULL;
 TaskHandle_t ReadNfcMatchMP3Handle = NULL; // 定义 ReadNfcMatchMP3 任务的句柄
 bool downloadComplete = false;
 
-void ReadNfcMatchMP3(void *pvParameters) 
+//
+// 熄灭 RGB 灯
+void Turn_Off_RGB()
 {
-  while (1) 
-  {
-    Serial.println("Task 1 is running...");
-    uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 }; // 存储读取到的UIDs
-    uint8_t uidLength; // UID长度
-   
-    Serial.println("Waiting for NFC card....");
-    // 检查是否有nfc卡片
-    if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) 
-    {
-      // 打印 UID
-      Serial.print("UID: ");
-      for (uint8_t i = 0; i < uidLength; i++) 
-      {
-        Serial.print(uid[i] < 0x10 ? " 0" : " ");
-        Serial.print(uid[i], HEX);
+  rgbLED.setPixelColor(0, rgbLED.Color(0, 0, 0));
+  rgbLED.show();
+}
+
+
+// String findMp3InConfig(const String& uid) {
+//   configFile.seek(0);
+//   Serial.println("Config_file:");
+//   while (configFile.available()) 
+//   {
+//     String line = configFile.readStringUntil('\n');
+//     line.trim();
+//     Serial.println("file:"+line);
+//     if (line.startsWith(uid))
+//     {
+//       return "/" + line.substring(line.indexOf(' ') + 1); // 更安全的字符串截取
+//     }
+//   }
+//   return "";
+// }
+const String AlarmAudioPath = "/Where Is My Mind.MP3";
+const String PassAudioPath = "/Pass.mp3";
+
+String findMp3InConfig(const String& uid) {
+  File file_find = SD.open("/config.txt", FILE_READ);
+  if (file_find) {
+      while (file_find.available()) {
+          String line = file_find.readStringUntil('\n');
+          line.trim(); // 去除行首尾的空白字符
+
+          // 判断该行是否包含指定的 uid
+          if (line.indexOf(uid) != -1) {
+              file_find.close();
+              return PassAudioPath;
+          }
       }
-      Serial.println();
-      String uidString = "";
+      file_find.close();
+  }
+  return "";
+}
+
+void Pass_Secure(const String& path) {
+  audio.stopSong();
+  delay(30); // 必要的停止缓冲
+  Serial.printf("Playing: %s\n", path.c_str());
+  audio.connecttoFS(SD, path.c_str());
+  // 点亮为绿色
+  rgbLED.setPixelColor(0, rgbLED.Color(0, 255, 0));
+  rgbLED.show();
+  delay(2000);
+  // 熄灭 RGB 灯
+  rgbLED.setPixelColor(0, rgbLED.Color(0, 0, 0));
+  rgbLED.show();
+}
+
+
+
+void forcible_Entry(const String& path) {
+  audio.stopSong();
+  delay(30); // 必要的停止缓冲
+  Serial.printf("Playing: %s\n", path.c_str());
+  Serial.println("Card not registered, playing alarm");
+  audio.connecttoFS(SD, path.c_str());
+  // 点亮为红色
+  rgbLED.setPixelColor(0, rgbLED.Color(255, 0, 0));
+  rgbLED.show();
+}
+
+void recording_mode_(const String& uidString)
+{
+  buttonPressedFlag = 0; // 重置标志变量
+  Serial.println("Enter recording mode - next card will be registered");
+  appendToConfigFile(uidString, "Pass.mp3");
+  Serial.println("写入完毕：当前白名单配置文件为:");
+  printConfigFileContents();
+  // 熄灭 RGB 灯
+  rgbLED.setPixelColor(0, rgbLED.Color(0, 0, 0));
+  rgbLED.show();
+} 
+
+
+void ReadNfcMatchMP3(void *pvParameters) {
+  static String pre_uidString; // 使用static保持状态
+  
+  while (1) {
+    Serial.println("[NFC] Waiting for card...");
+    
+    uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 }; // 存储读取到的UIDs
+    uint8_t uidLength;
+    
+    if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) {
+      // 1. UID处理优化
+      String uidString;
       for (int i = 0; i < sizeof(uid); i++) 
       {
         if (uid[i] < 0x10) 
@@ -515,81 +602,107 @@ void ReadNfcMatchMP3(void *pvParameters)
         uidString += String(uid[i], HEX); // 将元素转换为十六进制字符串并拼接
       }
 
-      Serial.println(uidString); // 打印拼接后的字符串
-
-      if(pre_uidString == uidString)
-      {
-        //Serial.println("相同的UID,暂停");
-        Serial.println("Stop or Play song"); 
-        audio.pauseResume();
-        delay(300);
-        continue;
+      Serial.printf("Detected UID: %s\n", uidString.c_str());
+      // 2. 检查按钮是否被按下
+      if (buttonPressedFlag == 1) {
+        recording_mode_(uidString);
       }
-      else
-      {
-        //Serial.println("不同的UID,操作切换歌曲");
-        pre_uidString = uidString;
-        // audiopaly = false;
+      // 3. 配置文件查找优化
+      String mp3Path = findMp3InConfig(uidString);
+      // audio.stopSong();
+      // delay(30);
+      if (!mp3Path.isEmpty()) {
+        //Pass_Secure(PassAudioPath);
+        Pass_Secure(mp3Path); // 封装播放逻辑
+      } else {
+        forcible_Entry(AlarmAudioPath);
       }
-      bool found = false;
-      // 在配置文件中查找UID对应的MP3文件名
-      configFile.seek(0);
-      while (configFile.available()) 
-      {
-        String line = configFile.readStringUntil('\n');
-        line.trim();
-        if (line.startsWith(uidString)) 
-        {
-          // 找到匹配的UID，播放对应的MP3文件
-          String mp3FileName = "/" + line.substring(15); // 假设UID和MP3文件名之间有一个空格
-          Serial.println(mp3FileName); // 打印拼接后的字符串
-          // audiopaly = true;
-          // 如果当前没有在播放，则开始播放，若在播放，则暂停
-          audio.stopSong();
-          delay(30);
-          Serial.println("MP3 music shop!!");
-          audio.connecttoFS(SD, "pass.mp3"); 
-          printConfigFileContents();
-          found = true;
-          break;
-        }
-      }
-      if (!found)
-      {
-      Serial.println("NFC card not found, playing Alarm...");
-      audio.connecttoFS(SD, "Alarm.mp3"); 
-      }
-    }  
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(1000)); // 更清晰的延时写法
   }
 }
 
-// // 写入 UID 到配置文件的方法
-// void appendUidToConfigFile(const String& uidString) {
-//   File file = SD.open("/config.txt", FILE_APPEND);
-//   if (file) {
-//     // 先写入一个空行
-//     file.println();
-//     // 写入 UID
-//     file.println(uidString);
-//     file.close();
-//     Serial.println("UID appended to config file");
-//   } else {
-//     Serial.println("Failed to open config file for writing UID");
-//   }
-// }
 
-// // 写入文件名到配置文件的方法（带空格）
-// void appendFileNameToConfigFile(const String& fileName) {
-//   File file = SD.open("/config.txt", FILE_APPEND);
-//   if (file) {
-//     // 写入空格和文件名
-//     file.print(" ");
-//     file.println(fileName);
-//     file.close();
-//     Serial.println("File name appended to config file");
-//   } else {
-//     Serial.println("Failed to open config file for writing file name");
+
+
+// void ReadNfcMatchMP3(void *pvParameters) 
+// {
+//   while (1) 
+//   {
+//     Serial.println("Task 1 is running...");
+//     uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 }; // 存储读取到的UIDs
+//     uint8_t uidLength; // UID长度
+   
+//     Serial.println("Waiting for NFC card....");
+//     // 检查是否有nfc卡片
+//     if (nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength)) 
+//     {
+//       // 打印 UID
+//       Serial.print("UID: ");
+//       for (uint8_t i = 0; i < uidLength; i++) 
+//       {
+//         Serial.print(uid[i] < 0x10 ? " 0" : " ");
+//         Serial.print(uid[i], HEX);
+//       }
+//       Serial.println();
+//       String uidString = "";
+//       for (int i = 0; i < sizeof(uid); i++) 
+//       {
+//         if (uid[i] < 0x10) 
+//         {
+//           uidString += "0"; // 如果元素小于0x10，则补0
+//         }
+//         uidString += String(uid[i], HEX); // 将元素转换为十六进制字符串并拼接
+//       }
+
+//       Serial.println(uidString); // 打印拼接后的字符串
+
+//       if(pre_uidString == uidString)
+//       {
+//         //Serial.println("相同的UID,暂停");
+//         Serial.println("Stop or Play song"); 
+//         audio.pauseResume();
+//         delay(300);
+//         continue;
+//       }
+//       else
+//       {
+//         //Serial.println("不同的UID,操作切换歌曲");
+//         pre_uidString = uidString;
+//         // audiopaly = false;
+//       }
+//       bool found = false;
+//       //在配置文件中查找UID对应的MP3文件名
+//       configFile.seek(0);
+//       while (configFile.available()) 
+//       {
+//         String line = configFile.readStringUntil('\n');
+//         line.trim();
+//         if (line.startsWith(uidString)) 
+//         {
+//           // 找到匹配的UID，播放对应的MP3文件
+//           String mp3FileName = "/" + line.substring(15); // 假设UID和MP3文件名之间有一个空格
+//           Serial.println(mp3FileName); // 打印拼接后的字符串
+//           // audiopaly = true;
+//           // 如果当前没有在播放，则开始播放，若在播放，则暂停
+//           audio.stopSong();
+//           delay(30);
+//           Serial.println("MP3 music shop!!");
+//           audio.connecttoFS(SD, "pass.mp3"); 
+
+//           printConfigFileContents();
+//           found = true;
+//           break;
+//         }
+//       }
+//       if (!found)
+//       {
+//       Serial.println("NFC card not found, playing Alarm...");
+//       audio.connecttoFS(SD, "/Where Is My Mind.MP3");
+//       }
+//     }  
+//     vTaskDelay(1000 / portTICK_PERIOD_MS);
 //   }
 // }
 
@@ -605,6 +718,26 @@ void appendToConfigFile(const String& uidString, const String& fileName) {
   }
 }
 
+void handleButton() {
+  static int lastButtonState = HIGH;
+  int buttonState = digitalRead(buttonPin);
+  if (buttonState != lastButtonState) {
+      if (buttonState == LOW) {
+          Pass_Secure(PassAudioPath);
+          Serial.println("当前白名单配置文件内容为:");
+          printConfigFileContents();
+          Serial.println("Button pressed - entering record mode");
+          buttonPressedFlag = 1; // 设置标志变量为1表示按钮已按下
+          // 点亮为蓝色
+          rgbLED.setPixelColor(0, rgbLED.Color(0, 0, 255));
+          rgbLED.show();
+      }
+      delay(50); // 消抖
+  }
+  lastButtonState = buttonState;
+}
+
+
 void setup() {
   //SPI初始化
   Wire.setPins(SDA_PIN,SCL_PIN);
@@ -616,8 +749,8 @@ void setup() {
   digitalWrite(SD_CS, HIGH);
   //图片放大器初始化
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
-  audio.setVolume(3); // 0...21    控制音量
-
+  audio.setVolume(21); // 0...21    控制音量
+  
   // digitalWrite(LED_BUILTIN, LOW);   // turn the LED off by making the voltage LOW
 
  
@@ -645,6 +778,15 @@ void setup() {
   {
     Serial.println("打开配置文件成功！");
   }
+
+  // 初始化 RGB 灯
+  rgbLED.begin();
+  // 初始状态关闭 RGB 灯
+  rgbLED.show();
+  // 设置合适的亮度，避免过亮或过暗
+  rgbLED.setBrightness(50);
+  //按钮
+  pinMode(buttonPin, INPUT_PULLUP); // 启用内部上拉电阻
   // //查看wifi配置文件
   // // 打开WifiConfig.txt文件
   // File configFile = SD.open("/WifiConfig.txt", FILE_READ);
@@ -710,6 +852,7 @@ void setup() {
   //downloadMp3FileToSD(HttpGet);
   //xTaskCreate(ReadNfcMatchMP3Task, "NfcTask", 4096, NULL, 2, NULL);
   //audio.connecttohost(HttpGet); //  128k mp在线播放
+  audio.connecttoFS(SD,"pass.mp3");
   xTaskCreate(ReadNfcMatchMP3, "ReadNfcMatchMP3", 1024*6, NULL, 2, &ReadNfcMatchMP3Handle);
   // if (WiFi.status() == WL_CONNECTED) {
   //       Serial.println("WiFi connected");
@@ -725,9 +868,10 @@ String readString;
 
 void loop()
 {
-
-
     audio.loop();
+    //按钮
+    handleButton();
+
     if(Serial.available()){ // put streamURL in serial monitor
         audio.stopSong();
         String r=Serial.readString(); r.trim();
